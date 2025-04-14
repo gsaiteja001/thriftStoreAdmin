@@ -39,19 +39,73 @@ const OrderList = () => {
     fetchOrders();
   }, []);
 
+    // ---------------------- Order Categorization ----------------------
+    const ongoingOrders = orders.filter(order => 
+      ['placed', 'shipped'].includes(order.order_status)
+    );
+    const cancelledOrders = orders.filter(order => 
+      ['approve_cancel', 'cancelled'].includes(order.order_status)
+    );
+    const completedOrders = orders.filter(order => 
+      order.order_status === 'delivered'
+    );
+  
+    // ---------------------- New Handler for Cancel Approval ----------------------
+    const handleApproveCancel = async (order) => {
+      try {
+        // Get required data - you may need to adjust these values based on your data structure
+        const refund_amount = order.item_price * order.item_quantity; // Example calculation
+        const payment_method = "Stripe"; // Default or get from system config
+        const comment = "Approved cancellation and refund processed";
+        const status = "approved";
+    
+        // First update order status to cancelled
+        await axios.put(
+          `https://thriftstorebackend-8xii.onrender.com/api/orders/${order.order_id}`,
+          { order_status: 'cancelled' }
+        );
+    
+        // Then call the admin approval endpoint with all required data
+        const response = await axios.put(
+          `https://thriftstorebackend-8xii.onrender.com/api/orders/admin/approve`,
+          {
+            order_id: order.order_id,
+            return_id: order.return_id,
+            status,
+            refund_amount,
+            payment_method,
+            comment
+          }
+        );
+    
+        setOrders(prevOrders =>
+          prevOrders.map(o =>
+            o.order_id === order.order_id ? { 
+              ...o, 
+              order_status: 'cancelled',
+              return_status: status,
+              refund_amount 
+            } : o
+          )
+        );
+        
+        alert('Cancellation and refund processed successfully!');
+      } catch (error) {
+        console.error('Error approving cancellation:', error);
+        alert('Failed to process cancellation approval.');
+      }
+    };
+
   // Retrieve orders, then fetch their associated customer & item details
   const fetchOrders = async () => {
     try {
-      // 1) Get the vendorId from localStorage
       const vendorId = localStorage.getItem('vendorId') || 'demo_vendor';
 
-      // 2) Fetch orders from your local API
       const { data } = await axios.get(
         `https://thriftstorebackend-8xii.onrender.com/api/orders/vendor/${vendorId}`
       );
 
-      // 3) For each order, parse shipping_address for lat/long if present
-      //    Then fetch extra details: customer.name and item.name
+
       const ordersWithDetails = await Promise.all(
         data.map(async (o) => {
           let lat = null;
@@ -59,7 +113,6 @@ const OrderList = () => {
           let customerName = 'Unknown Customer';
           let itemName = `Item ${o.item_id}`;
 
-          // Parse shipping address
           if (o.shipping_address && o.shipping_address !== 'null') {
             try {
               const shippingObj = JSON.parse(o.shipping_address);
@@ -70,7 +123,6 @@ const OrderList = () => {
             }
           }
 
-          // Fetch customer details
           try {
             const customerRes = await axios.get(
               `https://thriftstorebackend-8xii.onrender.com/api/customer/${o.customer_id}`
@@ -111,10 +163,7 @@ const OrderList = () => {
   };
 
   // ---------------------- Shipping Creation ----------------------
-  /**
-   * Create a shipping record if order status is changed to 'shipped'.
-   * Adjust the shipping payload as needed for your backend.
-   */
+ 
   const handleCreateShipping = async (order) => {
     try {
       const payload = {
@@ -122,7 +171,7 @@ const OrderList = () => {
         shipping_method: 'Standard Shipping',
         shipping_cost: 5.0,
         shipping_date: new Date().toISOString(),
-        tracking_number: `TRK${order.order_id}`, // example
+        tracking_number: `TRK${order.order_id}`, 
         delivery_date: null,
         shipping_status: 'shipped',
       };
@@ -138,17 +187,25 @@ const OrderList = () => {
   };
 
   // ---------------------- Status & Update Handlers ----------------------
-  /**
-   * When the user changes the status dropdown, we update local state
-   * so that order reflects the new choice.
-   */
+
   const handleStatusChange = (orderId, newStatus) => {
-    setOrders((prevOrders) =>
-      prevOrders.map((order) =>
+    setOrders((prevOrders) => {
+      const updatedOrders = prevOrders.map((order) =>
         order.order_id === orderId ? { ...order, order_status: newStatus } : order
-      )
-    );
+      );
+  
+      const updatedOrder = updatedOrders.find(o => o.order_id === orderId);
+  
+      if (newStatus === 'delivered') {
+        handleUpdate({ ...updatedOrder, order_status: 'delivered' });
+      }
+  
+      return updatedOrders;
+    });
   };
+  
+
+
 
   /**
    * When the "Update" button is clicked, we:
@@ -157,22 +214,33 @@ const OrderList = () => {
    */
   const handleUpdate = async (order) => {
     try {
-      // If new status is 'shipped', create shipping entry first
       if (order.order_status === 'shipped') {
         await handleCreateShipping(order);
       }
-
-      // Then update the order status
+  
       await axios.put(`https://thriftstorebackend-8xii.onrender.com/api/orders/${order.order_id}`, {
         order_status: order.order_status,
       });
-
+  
+      // ✅ Step 3: If status is 'delivered', trigger payment transaction API
+      if (order.order_status === 'delivered') {
+        await axios.post(`https://thriftstorebackend-8xii.onrender.com/payment/record`, {
+          order_id: order.order_id,
+          item_id: order.item_id,
+          vendor_id: order.vendor_id,
+          payment_amount: parseFloat(order.item_price),
+          payment_method: 'card', 
+          status: 'paid'
+        });
+      }
+  
       alert(`Order #${order.order_id} updated successfully!`);
     } catch (error) {
-      console.error('Error updating order status:', error);
-      alert('Failed to update order status.');
+      console.error('Error updating order status or recording payment:', error);
+      alert('Failed to update order or record payment.');
     }
   };
+  
 
   // ---------------------- Map Handlers ----------------------
   /**
@@ -200,7 +268,7 @@ const OrderList = () => {
           ];
           setCurrentLocation(newLocation);
 
-          // Recenter the map
+          
           if (mapRef.current) {
             mapRef.current.setView(newLocation, 13);
           }
@@ -255,12 +323,14 @@ const OrderList = () => {
       <h1 style={styles.title}>Order List</h1>
 
       <div style={styles.content}>
-        {/* Left Column: Table */}
+        {/* Ongoing Orders Table */}
         <div style={styles.tableContainer}>
+          <h2 style={styles.tableTitle}>Ongoing Orders</h2>
           <table style={styles.table}>
             <thead>
               <tr>
                 <th style={styles.th}>Order ID</th>
+                
                 <th style={styles.th}>Customer</th>
                 <th style={styles.th}>Date</th>
                 <th style={styles.th}>Status</th>
@@ -271,7 +341,7 @@ const OrderList = () => {
               </tr>
             </thead>
             <tbody>
-              {orders.map((order) => (
+              {ongoingOrders.map((order) => (
                 <tr
                   key={order.order_id}
                   style={styles.tr}
@@ -298,7 +368,6 @@ const OrderList = () => {
                         handleStatusChange(order.order_id, e.target.value)
                       }
                       style={styles.select}
-                      onClick={(e) => e.stopPropagation()} // prevent row-click
                     >
                       <option value="placed">placed</option>
                       <option value="shipped">shipped</option>
@@ -346,11 +415,133 @@ const OrderList = () => {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div style={styles.content}>
+        <div style={styles.tableContainer}>
+          <h2 style={styles.tableTitle}>Cancelled Orders</h2>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+              <th style={styles.th}>Order ID</th>
+              <th style={styles.th}>Item</th>
+              <th style={styles.th}>Customer</th>
+                <th style={styles.th}>Status</th>
+                <th style={styles.th}>Qty</th>
+                <th style={styles.th}>Price</th>
+<th style={styles.th}>Refund Amount</th>
+                <th style={styles.th}>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cancelledOrders.map((order) => (
+                <tr
+                  key={order.order_id}
+                  style={styles.tr}
+                  onClick={() => handleOrderClick(order)}
+                >
+
+                <td style={styles.tdClickable}>{order.order_id}</td>
+
+                  {/* Item Name */}
+                  <td style={styles.td}>{order.itemName}</td>
+
+                    {/* Customer Name */}
+                    <td style={styles.td}>
+                    {order.customerName}
+                  </td>
+
+
+                  <td style={styles.td}>{order.order_status}</td>
+                  {/* Quantity */}
+                  <td style={styles.td}>{order.item_quantity}</td>
+
+                  {/* Price */}
+                  <td style={styles.td}>{order.item_price}</td>
+
+                  <td style={styles.td}>
+                    {order.refund_amount ? `$${order.refund_amount}` : 'Pending'}
+                  </td>
+
+                  <td style={styles.td}>{order.order_status}</td>
+                  <td style={styles.td}>
+                    {order.order_status === 'approve_cancel' && (
+                      <button
+                        style={styles.approveButton}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleApproveCancel(order);
+                        }}
+                      >
+                        Approve
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        </div>
+      <div style={styles.content}>
+
+        {/* Completed Orders Table */}
+        <div style={styles.tableContainer}>
+          <h2 style={styles.tableTitle}>Completed Orders</h2>
+          <table style={styles.table}>
+            <thead>
+              <tr>
+                <th style={styles.th}>Order ID</th>
+                <th style={styles.th}>Item</th>
+                <th style={styles.th}>Customer</th>
+                <th style={styles.th}>Date</th>
+                <th style={styles.th}>Status</th>
+                <th style={styles.th}>Qty</th>
+                <th style={styles.th}>Price</th>
+              </tr>
+            </thead>
+            <tbody>
+              {completedOrders.map((order) => (
+                <tr
+                  key={order.order_id}
+                  style={styles.tr}
+                  onClick={() => handleOrderClick(order)}
+                >
+                  
+                  <td style={styles.tdClickable}>{order.order_id}</td>
+
+                  {/* Item Name */}
+                  <td style={styles.td}>{order.itemName}</td>
+
+                  {/* Customer Name */}
+                  <td style={styles.td}>
+                    {order.customerName}
+                  </td>
+
+                  {/* Order Date */}
+                  <td style={styles.td}>
+                    {new Date(order.order_date).toLocaleString()}
+                  </td>
+                  <td style={styles.td}>{order.order_status}</td>
+                  {/* Quantity */}
+                  <td style={styles.td}>{order.item_quantity}</td>
+
+                  {/* Price */}
+                  <td style={styles.td}>{order.item_price}</td>
+
+                  
+                  {/* No action column */}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
       </div>
     </div>
   );
 };
+
 
 // ---------------------- Inline Styles ----------------------
 const styles = {
@@ -360,6 +551,22 @@ const styles = {
     minHeight: '100vh',
     padding: '20px',
   },
+
+  tableTitle: {
+    fontSize: '1.4rem',
+    marginBottom: '15px',
+    color: '#2c3e50',
+  },
+  approveButton: {
+    padding: '6px 12px',
+    border: 'none',
+    borderRadius: '4px',
+    backgroundColor: '#ff6b6b',
+    color: 'white',
+    cursor: 'pointer',
+    fontWeight: 'bold',
+  },
+
   title: {
     fontSize: '1.8rem',
     marginBottom: '20px',
@@ -375,6 +582,7 @@ const styles = {
     padding: '20px',
     boxShadow: '0 4px 6px rgba(0,0,0,0.1)',
     overflowX: 'auto',
+    marginBottom: '10px',
   },
   table: {
     width: '100%',
@@ -418,7 +626,7 @@ const styles = {
     fontWeight: 'bold',
   },
   mapSection: {
-    width: '1200px',
+    width: '800px',
     height: '30vh',
     display: 'flex',
     flexDirection: 'column',
