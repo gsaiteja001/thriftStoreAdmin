@@ -37,7 +37,7 @@ const ProductList = () => {
   });
 
   const [uploadedImages, setUploadedImages] = useState([]); // For handling uploaded images
-
+  const [imagePreviews, setImagePreviews] = useState([]);
   const [categories, setCategories] = useState([]);
 
   const fetchItemsByVendor = async (vendorId) => {
@@ -113,7 +113,7 @@ const ProductList = () => {
   };
   
   const handleItemAdd = async () => {
-    const newItem = { ...editItemData, imageURL: uploadedImages.join(','), vendor_id: vendorId };
+    const newItem = { ...editItemData, vendor_id: vendorId };
     try {
       await axios.post('https://thriftstorebackend-8xii.onrender.com/api/item/additem', newItem);
       const vendorId = localStorage.getItem('vendorId');
@@ -143,37 +143,73 @@ const ProductList = () => {
     setUploadedImages([]);
     setShowUploadContainer(true);
   };
-  
 
-  // Image Upload using FormData with imgbb API
-  const handleImageUpload = async (files) => {
-    const filesArray = Array.isArray(files) ? files : [files];
-    const formData = new FormData();
-    filesArray.forEach((file) => {
+
+// Replace handleImageUpload and useDropzone with new implementation
+const onDrop = (acceptedFiles) => {
+  setUploadedImages((prev) => [...prev, ...acceptedFiles]);
+
+  const previews = acceptedFiles.map((file) =>
+    Object.assign(file, {
+      preview: URL.createObjectURL(file),
+    })
+  );
+  setImagePreviews((prev) => [...prev, ...previews]);
+};
+
+const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  onDrop,
+  accept: 'image/*',
+});
+
+// Updated removeImage function
+const removeImage = (index) => {
+  const removedFile = imagePreviews[index];
+  URL.revokeObjectURL(removedFile.preview);
+
+  setUploadedImages((prev) => prev.filter((_, i) => i !== index));
+  setImagePreviews((prev) => prev.filter((_, i) => i !== index));
+};
+
+// Add uploadImages function
+const uploadImages = async () => {
+  if (uploadedImages.length === 0) {
+    alert('No product images to upload.');
+    return;
+  }
+
+  try {
+    const uploadPromises = uploadedImages.map(async (file) => {
+      const formData = new FormData();
       formData.append('image', file);
-    });
-    try {
       const response = await axios.post(
-        'https://api.imgbb.com/1/upload?expiration=600&key=4cd9c9ee9a555c27315262a6a7d7a8b2',
+        'https://thriftstorebackend-8xii.onrender.com/upload_product_image/thriftStoreImageUpload',
         formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
+
       );
-      const imageUrl = response.data.data.url;
-      setUploadedImages((prevImages) => [...prevImages, imageUrl]);
-    } catch (error) {
-      console.error('Error uploading image:', error);
-    }
-  };
+      return response.data.imageUrl;
+    });
 
-  const { getRootProps, getInputProps } = useDropzone({
-    onDrop: (acceptedFiles) => {
-      handleImageUpload(acceptedFiles);
-    },
-  });
+    const urls = await Promise.all(uploadPromises);
+    const validUrls = urls.filter((url) => url !== null);
+    
+    const existingUrls = editItemData.imageURL ? editItemData.imageURL.split(',') : [];
+    const allUrls = [...existingUrls, ...validUrls].join(',');
 
-  const removeImage = (index) => {
-    setUploadedImages(uploadedImages.filter((_, i) => i !== index));
-  };
+    setEditItemData(prev => ({
+      ...prev,
+      imageURL: allUrls,
+    }));
+    
+    setUploadedImages([]);
+    setImagePreviews([]);
+    alert('Product images uploaded successfully!');
+  } catch (error) {
+    console.error('Error uploading product images:', error);
+    alert('One or more product images failed to upload.');
+  }
+};
+
 
   const paginatedItems = () => {
     const offset = currentPage * itemsPerPage;
@@ -245,38 +281,58 @@ const ProductList = () => {
 
       {/* Add/Edit Item Modal */}
       {(showUploadContainer || showEditModal) && (
-        <Modal onClick={(e) => e.stopPropagation()}>
-          <ModalTitle>{showUploadContainer ? 'Add Item' : 'Edit Item'}</ModalTitle>
-          <InputRow>
-            <Label>Name:</Label>
-            <Input
-              type="text"
-              value={editItemData.name}
-              onChange={(e) =>
-                setEditItemData({ ...editItemData, name: e.target.value })
-              }
-            />
-          </InputRow>
-          <InputRow>
-            <Label>Brand:</Label>
-            <Input
-              type="text"
-              value={editItemData.brand}
-              onChange={(e) =>
-                setEditItemData({ ...editItemData, brand: e.target.value })
-              }
-            />
-          </InputRow>
-          <InputRow>
-            <Label>Price:</Label>
-            <Input
-              type="number"
-              value={editItemData.selling_price}
-              onChange={(e) =>
-                setEditItemData({ ...editItemData, selling_price: e.target.value })
-              }
-            />
-          </InputRow>
+  <Modal onClick={(e) => e.stopPropagation()}>
+    <ModalTitle>{showUploadContainer ? 'Add Item' : 'Edit Item'}</ModalTitle>
+    
+    <InputRowGroup>
+      <InputRow>
+        <Label>Name:</Label>
+        <Input
+          type="text"
+          value={editItemData.name}
+          onChange={(e) => setEditItemData({ ...editItemData, name: e.target.value })}
+        />
+      </InputRow>
+      <InputRow>
+        <Label>Brand:</Label>
+        <Input
+          type="text"
+          value={editItemData.brand}
+          onChange={(e) => setEditItemData({ ...editItemData, brand: e.target.value })}
+        />
+      </InputRow>
+    </InputRowGroup>
+
+    <InputRowGroup>
+      <InputRow>
+        <Label>Size:</Label>
+        <Input
+          type="text"
+          value={editItemData.size}
+          onChange={(e) => setEditItemData({ ...editItemData, size: e.target.value })}
+        />
+      </InputRow>
+      <InputRow>
+        <Label>Color:</Label>
+        <Input
+          type="text"
+          value={editItemData.color}
+          onChange={(e) => setEditItemData({ ...editItemData, color: e.target.value })}
+        />
+      </InputRow>
+    </InputRowGroup>
+
+
+    {/* Keep other input rows as single column */}
+    <InputRow>
+      <Label>Price:</Label>
+      <Input
+        type="number"
+        value={editItemData.selling_price}
+        onChange={(e) => setEditItemData({ ...editItemData, selling_price: e.target.value })}
+      />
+    </InputRow>
+
           <InputRow>
             <Label>Description:</Label>
             <Input
@@ -303,24 +359,40 @@ const ProductList = () => {
             </Select>
           </InputRow>
           <InputRow>
-            <Label>Images:</Label>
-            <div {...getRootProps()}>
-              <input {...getInputProps()} />
-              <Dropzone>
-                <p>Drag & Drop your images here, or click to select files.</p>
-              </Dropzone>
-            </div>
-            <PreviewContainer>
-              {uploadedImages.map((image, index) => (
-                <ImagePreview key={index}>
-                  <PreviewImg src={image} alt="preview" />
-                  <RemoveImageButton onClick={() => removeImage(index)}>
-                    Remove
-                  </RemoveImageButton>
-                </ImagePreview>
-              ))}
-            </PreviewContainer>
-          </InputRow>
+  <Label>Images:</Label>
+  <div {...getRootProps()}>
+    <input {...getInputProps()} />
+    <Dropzone>
+      {isDragActive ? (
+        <p>Drop images here...</p>
+      ) : (
+        <p>Drag & Drop your images here, or click to select files.</p>
+      )}
+    </Dropzone>
+  </div>
+  <PreviewContainer>
+    {/* Existing images */}
+    {editItemData.imageURL && 
+     editItemData.imageURL.split(',').map((url, index) => (
+      <ImagePreview key={`existing-${index}`}>
+        <PreviewImg src={url} alt="existing preview" />
+      </ImagePreview>
+    ))}
+    
+    {/* New image previews */}
+    {imagePreviews.map((file, index) => (
+      <ImagePreview key={`new-${index}`}>
+        <PreviewImg src={file.preview} alt="new preview" />
+        <RemoveImageButton onClick={() => removeImage(index)}>
+          Remove
+        </RemoveImageButton>
+      </ImagePreview>
+    ))}
+  </PreviewContainer>
+  <PrimaryButton onClick={uploadImages} type="button">
+    Upload Images
+  </PrimaryButton>
+</InputRow>
           <ButtonsRow>
             <PrimaryButton onClick={showUploadContainer ? handleItemAdd : handleItemSave}>
               {showUploadContainer ? 'Add Item' : 'Save Changes'}
@@ -519,20 +591,30 @@ const UpdatedReactPaginate = styled(ReactPaginate)`
     }
   }
 `;
+const InputRowGroup = styled.div`
+  display: flex;
+  gap: 15px;
+  width: 100%;
+  > div {
+    flex: 1;
+  }
+`;
 
-/* Modal and Form Styling */
+// Update the Modal styled component
 const Modal = styled.div`
   position: fixed;
-  top: 10%;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   width: 90%;
-  max-width: 600px;
+  max-width: 800px;
+  max-height: 90vh;
   background: #fff;
   padding: 30px;
   border-radius: 10px;
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.15);
   z-index: 1100;
+  overflow-y: auto;
 `;
 
 const ModalTitle = styled.h2`

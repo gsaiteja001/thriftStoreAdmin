@@ -1,7 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { CircularProgressbar, buildStyles } from 'react-circular-progressbar';
-import 'react-circular-progressbar/dist/styles.css';
-
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -14,7 +11,6 @@ import {
 } from 'chart.js';
 import { Line } from 'react-chartjs-2';
 
-// Register Chart.js components
 ChartJS.register(
   CategoryScale,
   LinearScale,
@@ -26,90 +22,100 @@ ChartJS.register(
 );
 
 const Dashboard = () => {
-  const [data, setData] = useState({
-    vendorName: 'John\'s Store',  // Example name, replace as needed
-    totalUsers: 0,
+  const [dashboardData, setDashboardData] = useState({
     totalSales: 0,
-    totalCollections: 0,
     totalProducts: 0,
-    pendingShipments: 0,
-    reviewsAwaitingApproval: 0,
     todayOrders: 0,
-    environmentalImpacts: {
-      co2: 0,
-      trees: 0,
-      energy: 0,
-    },
-    recentOrders: [],  // Will hold array of order objects
-    activities: [],     // Will hold array of activity/notification objects
+    pendingShipments: 0,
+    salesData: [],
+    recentOrders: [],
   });
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    // Fetch data from your server
     const fetchData = async () => {
       try {
-        const response = await fetch('https://api.example.com/dashboard-data');
-        const result = await response.json();
-        // Below is just an example structure; adapt to your actual API fields:
-        setData({
-          vendorName: result.vendorName || 'John\'s Store',
-          totalUsers: result.totalUsers || 356,
-          totalSales: result.totalSales || 12340,
-          totalCollections: result.totalCollections || 580,
-          totalProducts: result.totalProducts || 90,
-          pendingShipments: result.pendingShipments || 7,
-          reviewsAwaitingApproval: result.reviewsAwaitingApproval || 3,
-          todayOrders: result.todayOrders || 15,
-          environmentalImpacts: {
-            co2: result.environmentalImpacts?.co2 || 45,
-            trees: result.environmentalImpacts?.trees || 70,
-            energy: result.environmentalImpacts?.energy || 30,
-          },
-          recentOrders: result.recentOrders || [
-            { id: 101, customer: 'Alice', total: 45.0, status: 'Processing' },
-            { id: 102, customer: 'Bob', total: 72.5, status: 'Shipped' },
-          ],
-          activities: result.activities || [
-            { id: 1, message: 'Low stock alert: Product #1245' },
-            { id: 2, message: 'New review pending approval' },
-          ],
+        const vendorId = localStorage.getItem('vendorId');
+        if (!vendorId) throw new Error('Vendor not authenticated');
+
+        const [itemsRes, ordersRes] = await Promise.all([
+          fetch(`https://thriftstorebackend-8xii.onrender.com/api/vendor/${vendorId}/items`),
+          fetch(`https://thriftstorebackend-8xii.onrender.com/api/orders/vendor/${vendorId}`)
+        ]);
+
+        const checkJSON = async (res) => {
+          if (!res.ok) {
+            if (res.status === 404) return [];
+            throw new Error(`HTTP error! status: ${res.status}`);
+          }
+          return res.json();
+        };
+
+        const items = await checkJSON(itemsRes);
+        const orders = await checkJSON(ordersRes);
+        const safeOrders = Array.isArray(orders) ? orders : [];
+
+        // Calculate metrics
+        const totalSales = safeOrders.reduce((sum, order) => 
+          sum + (order.item_price * order.item_quantity), 0
+        );
+
+        const pendingShipments = safeOrders.filter(order => 
+          ['processing', 'shipped'].includes(order.order_status?.toLowerCase())
+        ).length;
+
+        const today = new Date().toISOString().split('T')[0];
+        const todayOrders = safeOrders.filter(order => 
+          order.order_date?.startsWith?.(today)
+        ).length;
+
+        // Process sales data for chart
+        const salesMap = safeOrders.reduce((acc, order) => {
+          const date = order.order_date ? new Date(order.order_date).toLocaleDateString() : 'Unknown';
+          acc[date] = (acc[date] || 0) + (order.item_price * order.item_quantity);
+          return acc;
+        }, {});
+
+        const salesData = Object.entries(salesMap)
+          .sort((a, b) => new Date(a[0]) - new Date(b[0]))
+          .slice(-7)
+          .map(([date, amount]) => ({ date, amount }));
+
+        setDashboardData({
+          totalSales,
+          totalProducts: items.length,
+          todayOrders,
+          pendingShipments,
+          salesData,
+          recentOrders: safeOrders.slice(0, 5).map(order => ({
+            id: order.order_id,
+            date: new Date(order.order_date).toLocaleDateString(),
+            item: order.item_name,
+            quantity: order.item_quantity,
+            total: order.item_price * order.item_quantity,
+            status: order.order_status
+          }))
         });
-      } catch (error) {
-        console.error('Error fetching data:', error);
-        // Fall back to sample local data if needed
-        setData((prev) => ({
-          ...prev,
-          vendorName: 'John\'s Store',
-          totalUsers: 356,
-          totalSales: 12340,
-          totalCollections: 580,
-          totalProducts: 90,
-          pendingShipments: 7,
-          reviewsAwaitingApproval: 3,
-          todayOrders: 15,
-          environmentalImpacts: { co2: 45, trees: 70, energy: 30 },
-          recentOrders: [
-            { id: 101, customer: 'Alice', total: 45.0, status: 'Processing' },
-            { id: 102, customer: 'Bob', total: 72.5, status: 'Shipped' },
-          ],
-          activities: [
-            { id: 1, message: 'Low stock alert: Product #1245' },
-            { id: 2, message: 'New review pending approval' },
-          ],
-        }));
+
+      } catch (err) {
+        console.error('Dashboard error:', err);
+        setError(err.message);
+      } finally {
+        setLoading(false);
       }
     };
 
     fetchData();
   }, []);
 
-  // === Chart Configuration (Sample Data) ===
+  // Chart configuration
   const chartData = {
-    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    labels: dashboardData.salesData.map(item => item.date),
     datasets: [
       {
         label: 'Daily Sales ($)',
-        data: [200, 450, 300, 600, 800, 750, 1000], // Example data
+        data: dashboardData.salesData.map(item => item.amount),
         fill: false,
         borderColor: '#8B26C2',
         tension: 0.2,
@@ -124,7 +130,7 @@ const Dashboard = () => {
       legend: { display: false },
       title: {
         display: true,
-        text: 'Weekly Sales Overview',
+        text: 'Sales Overview',
         color: '#2b292b',
         font: { size: 16 },
       },
@@ -140,7 +146,7 @@ const Dashboard = () => {
     },
   };
 
-  // === STYLES ===
+  // Styles
   const containerStyle = {
     display: 'flex',
     flexDirection: 'column',
@@ -156,18 +162,6 @@ const Dashboard = () => {
     textAlign: 'center',
   };
 
-  const titleStyle = {
-    margin: 0,
-    fontSize: '1.8rem',
-    fontWeight: 'bold',
-  };
-
-  const subtitleStyle = {
-    marginTop: '5px',
-    fontSize: '1rem',
-    opacity: 0.8,
-  };
-
   const mainContentStyle = {
     display: 'flex',
     flexDirection: 'column',
@@ -175,7 +169,6 @@ const Dashboard = () => {
     flex: '1',
   };
 
-  // Grid for top-level stats
   const statsGridStyle = {
     display: 'grid',
     gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
@@ -195,19 +188,6 @@ const Dashboard = () => {
     justifyContent: 'center',
   };
 
-  const statsNumberStyle = {
-    fontSize: '1.5rem',
-    fontWeight: 'bold',
-    margin: 0,
-  };
-
-  const statsLabelStyle = {
-    margin: 0,
-    fontSize: '0.9rem',
-    marginTop: '5px',
-    color: '#666',
-  };
-
   const sectionStyle = {
     backgroundColor: '#ffffff',
     borderRadius: '10px',
@@ -217,201 +197,78 @@ const Dashboard = () => {
     color: '#2b292b',
   };
 
-  // Environmental impact circles
-  const impactContainerStyle = {
-    display: 'flex',
-    justifyContent: 'space-around',
-    marginTop: '20px',
-  };
-
-  const circleContainerStyle = {
-    width: '100px',
-    height: '100px',
-    textAlign: 'center',
-  };
-
-  const ordersTableStyle = {
-    width: '100%',
-    borderCollapse: 'collapse',
-  };
-
-  const ordersTableHeaderCellStyle = {
-    textAlign: 'left',
-    padding: '8px',
-    backgroundColor: '#f2f2f2',
-    fontWeight: 'bold',
-  };
-
-  const ordersTableCellStyle = {
-    padding: '8px',
-    borderBottom: '1px solid #eee',
-  };
-
-  const activityListStyle = {
-    listStyle: 'none',
-    margin: 0,
-    padding: 0,
-  };
-
-  const activityListItemStyle = {
-    backgroundColor: '#f7f7f7',
-    borderRadius: '5px',
-    padding: '10px',
-    marginBottom: '10px',
-  };
+  if (loading) return <div style={{ padding: '20px', textAlign: 'center' }}>Loading dashboard...</div>;
+  if (error) return <div style={{ padding: '20px', color: 'red' }}>Error: {error}</div>;
 
   return (
     <div style={containerStyle}>
-      {/* Header */}
       <header style={headerStyle}>
-        <h1 style={titleStyle}>Welcome back, {data.vendorName}!</h1>
-        <p style={subtitleStyle}>
-          Here’s your next eco-friendly goal: Reduce plastic packaging by 25%!
-        </p>
+        <h1 style={{ margin: 0, fontSize: '1.8rem' }}>Vendor Dashboard</h1>
       </header>
 
-      {/* Main Content */}
       <div style={mainContentStyle}>
-        {/* Top-level Statistic Cards */}
         <div style={statsGridStyle}>
           <div style={statsCardStyle}>
-            <p style={statsNumberStyle}>
-              ₹{data.totalSales.toLocaleString()}
-            </p>
-            <p style={statsLabelStyle}>Total Sales</p>
+            <h3>₹{dashboardData.totalSales.toLocaleString()}</h3>
+            <p>Total Sales</p>
           </div>
           <div style={statsCardStyle}>
-            <p style={statsNumberStyle}>{data.todayOrders}</p>
-            <p style={statsLabelStyle}>Today’s Orders</p>
+            <h3>{dashboardData.todayOrders}</h3>
+            <p>Today's Orders</p>
           </div>
           <div style={statsCardStyle}>
-            <p style={statsNumberStyle}>{data.pendingShipments}</p>
-            <p style={statsLabelStyle}>Pending Shipments</p>
+            <h3>{dashboardData.pendingShipments}</h3>
+            <p>Pending Shipments</p>
           </div>
           <div style={statsCardStyle}>
-            <p style={statsNumberStyle}>{data.totalProducts}</p>
-            <p style={statsLabelStyle}>Total Products</p>
-          </div>
-          <div style={statsCardStyle}>
-            <p style={statsNumberStyle}>{data.reviewsAwaitingApproval}</p>
-            <p style={statsLabelStyle}>Reviews Awaiting Approval</p>
-          </div>
-          <div style={statsCardStyle}>
-            <p style={statsNumberStyle}>{data.environmentalImpacts.trees}</p>
-            <p style={statsLabelStyle}>Trees Planted</p>
+            <h3>{dashboardData.totalProducts}</h3>
+            <p>Total Products</p>
           </div>
         </div>
 
-        {/* Sales Graph */}
         <div style={sectionStyle}>
           <Line data={chartData} options={chartOptions} />
         </div>
 
-        {/* Order Overview Table */}
         <div style={sectionStyle}>
-          <h3>Latest Orders</h3>
-          <table style={ordersTableStyle}>
-            <thead>
-              <tr>
-                <th style={ordersTableHeaderCellStyle}>Order ID</th>
-                <th style={ordersTableHeaderCellStyle}>Customer</th>
-                <th style={ordersTableHeaderCellStyle}>Total</th>
-                <th style={ordersTableHeaderCellStyle}>Status</th>
-                <th style={ordersTableHeaderCellStyle}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.recentOrders.length > 0 ? (
-                data.recentOrders.map((order) => (
+          <h3>Recent Orders</h3>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '2px solid #eee' }}>Order ID</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '2px solid #eee' }}>Date</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '2px solid #eee' }}>Item</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '2px solid #eee' }}>Quantity</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '2px solid #eee' }}>Total</th>
+                  <th style={{ textAlign: 'left', padding: '8px', borderBottom: '2px solid #eee' }}>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dashboardData.recentOrders.map((order) => (
                   <tr key={order.id}>
-                    <td style={ordersTableCellStyle}>{order.id}</td>
-                    <td style={ordersTableCellStyle}>{order.customer}</td>
-                    <td style={ordersTableCellStyle}>
-                      ${order.total.toFixed(2)}
-                    </td>
-                    <td style={ordersTableCellStyle}>{order.status}</td>
-                    <td style={ordersTableCellStyle}>
-                      {/* Example link to Order Details */}
-                      <a href={`/orders/${order.id}`}>View Details</a>
+                    <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>#{order.id}</td>
+                    <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{order.date}</td>
+                    <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{order.item}</td>
+                    <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>{order.quantity}</td>
+                    <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>₹{order.total.toFixed(2)}</td>
+                    <td style={{ padding: '8px', borderBottom: '1px solid #eee' }}>
+                      <span style={{ 
+                        padding: '4px 8px', 
+                        borderRadius: '4px',
+                        background: order.status === 'completed' ? '#e6f9c8' : '#f7c8f9'
+                      }}>
+                        {order.status}
+                      </span>
                     </td>
                   </tr>
-                ))
-              ) : (
-                <tr>
-                  <td style={ordersTableCellStyle} colSpan="5">
-                    No recent orders found.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Activity Feed and Environmental Impact */}
-        <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-          {/* Activity Feed / Quick Notifications */}
-          <div style={{ flex: '1', minWidth: '280px' }}>
-            <div style={sectionStyle}>
-              <h3>Activity & Notifications</h3>
-              <ul style={activityListStyle}>
-                {data.activities.length > 0 ? (
-                  data.activities.map((activity) => (
-                    <li key={activity.id} style={activityListItemStyle}>
-                      {activity.message}
-                    </li>
-                  ))
-                ) : (
-                  <li style={activityListItemStyle}>
-                    No new activities or notifications.
-                  </li>
-                )}
-              </ul>
-            </div>
+                ))}
+              </tbody>
+            </table>
           </div>
-
-          {/* Environmental Impact Progress */}
-          <div style={{ flex: '1', minWidth: '280px' }}>
-            <div style={sectionStyle}>
-              <h3>Environmental Impacts</h3>
-              <div style={impactContainerStyle}>
-                <div style={circleContainerStyle}>
-                  <CircularProgressbar
-                    value={data.environmentalImpacts.co2}
-                    text={`${data.environmentalImpacts.co2}%`}
-                    styles={buildStyles({
-                      textColor: '#f7c8f9',
-                      pathColor: '#f7c8f9',
-                    })}
-                  />
-                  <p style={{ marginTop: '5px' }}>CO2 Reduction</p>
-                </div>
-                <div style={circleContainerStyle}>
-                  <CircularProgressbar
-                    value={data.environmentalImpacts.trees}
-                    text={`${data.environmentalImpacts.trees}%`}
-                    styles={buildStyles({
-                      textColor: '#e6f9c8',
-                      pathColor: '#e6f9c8',
-                    })}
-                  />
-                  <p style={{ marginTop: '5px' }}>Trees Planted</p>
-                </div>
-                <div style={circleContainerStyle}>
-                  <CircularProgressbar
-                    value={data.environmentalImpacts.energy}
-                    text={`${data.environmentalImpacts.energy}%`}
-                    styles={buildStyles({
-                      textColor: '#c8f9f7',
-                      pathColor: '#c8f9f7',
-                    })}
-                  />
-                  <p style={{ marginTop: '5px' }}>Energy Saved</p>
-                </div>
-              </div>
-            </div>
-          </div>
+          {dashboardData.recentOrders.length === 0 && 
+            <p style={{ padding: '16px', textAlign: 'center' }}>No recent orders found</p>}
         </div>
-
       </div>
     </div>
   );
